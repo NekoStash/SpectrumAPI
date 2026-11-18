@@ -60,8 +60,14 @@ def prepare_sdk(sdk_only: bool) -> None:
             raise ValueError(f"Exact SDK package is incomplete; no fallback is permitted: {source}")
     platform = signing_properties(sdk / "platforms/android-37.0/source.properties")
     tools = signing_properties(sdk / "build-tools/37.0.0/source.properties")
-    if platform.get("AndroidVersion.ApiLevel") != "37" or tools.get("Pkg.Revision") != "37.0.0":
-        raise ValueError("Installed SDK/build-tools metadata does not match API 37 / 37.0.0")
+    # The android-37.0 package can report the full API level in source.properties.
+    api_level = platform.get("AndroidVersion.ApiLevel")
+    build_tools_revision = tools.get("Pkg.Revision")
+    if api_level not in {"37", "37.0"} or build_tools_revision != "37.0.0":
+        raise ValueError(
+            f"Expected SDK API 37.0 and Build-Tools 37.0.0; "
+            f"found API {api_level!r} and Build-Tools {build_tools_revision!r}"
+        )
     if not sdk_only:
         ndk = signing_properties(sdk / "ndk/28.2.13676358/source.properties")
         if ndk.get("Pkg.Revision") != "28.2.13676358":
