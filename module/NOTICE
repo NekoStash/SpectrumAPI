@@ -1,0 +1,31 @@
+SpectrumAPI module delivery notice
+
+This archive targets arm64-v8a Android 17 / API 37 and requires a separately
+installed, enabled Zygisk Next. Only /system/bin/audioserver is declared as
+an injection target. Zygisk Next directly loads lib/libspectrum_payload.so
+through its FD injection entry; no second library is opened by module path.
+This module does not overlay ROM libraries or bundle a root CLI.
+
+Only audioserver process execmem is added to SELinux policy. No broad SELinux
+allow rules or automatic restart scripts are included.
+
+lib/libspectrum_payload.so links the Android NDK static C++ runtime
+(c++_static) so single-FD injection never opens module-directory shared
+libraries from audioserver. Upstream NDK and AOSP source notices are included
+under notices/. No ROM library, ROM attachment, official Zygisk Next API
+header, or Zygisk Next runtime binary is redistributed in this module.
+
+Build artifact SHA-256 values are provenance/integrity inventory only.
+See runtime-boundaries.json and build-info.json for machine-readable details.
+
+The pure-Java SDK connects directly to the native Binder extension on
+media.audio_flinger and does not require the optional Manager APK or any UID
+grant configuration. Discovery uses ServiceManager.checkService, a non-SDK
+entry point which some ROMs may restrict. No hidden-API exemptions, JNI
+discovery bridge, alternate backend or automatic reconnect is provided.
+
+The separately distributed Manager APK is an optional modern Xposed/LibXposed
+SystemUI media-island display and settings app. Its empty-by-default media
+whitelist, actual attached/visible island, local-playing state and full target
+APP_UID jointly gate Super Island subscriptions; it never requests ALL_MEDIA
+and never invokes su at runtime.

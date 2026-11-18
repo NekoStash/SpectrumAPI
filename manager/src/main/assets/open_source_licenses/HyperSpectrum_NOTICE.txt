@@ -1,0 +1,34 @@
+HyperSpectrum
+Copyright 2026 wxxsfxyzm
+Licensed under the Apache License, Version 2.0.
+
+The settings interface uses miuix.
+Copyright 2025-2026 compose-miuix-ui contributors
+Licensed under the Apache License, Version 2.0.
+https://github.com/compose-miuix-ui/miuix
+
+The module uses libxposed API and service.
+Copyright libxposed contributors
+Licensed under the Apache License, Version 2.0.
+https://github.com/libxposed
+
+The optional native backend uses Zygisk Next API 4 ABI declarations.
+No Zygisk Next hook engine is bundled.
+https://github.com/LSPosed/ZygiskNext/blob/v1.5.2/zygisk_next_api.h
+
+SpectrumAPI adaptation notice
+----------------------------
+Reference: wxxsfxyzm/HyperSpectrum commit
+cff6b634b34614531a5a9ce7cc96bf43bc7e3efa.
+The preceding paragraphs are the upstream NOTICE, retained for attribution.
+SpectrumAPI reuses/adapts display geometry, artwork colors, presentation motion,
+media-icon and local-route semantics, and ports SystemUI/plugin callback routing,
+layout compatibility, and view lifecycle. Modified files identify the adaptation.
+It does not bundle HyperSpectrum Visualizer, native capture, FFT, volume recovery,
+or its Zygisk Next backend. Its optional Xposed APK consumes SpectrumAPI SDK
+APP_UID subscriptions instead of capturing audio itself.
+SpectrumAPI projects SDK total band power by actual-Hz overlap into six display
+bands and uses a fixed peak-equivalent response curve. This is a display
+adaptation, not reconstruction of the original FFT and not numerical equivalence
+to HyperSpectrum's native FFT aggregation. RoxyHook supplies the modern hook DSL.
+Original/hyperos/ios choose color treatment only, not capture backends.

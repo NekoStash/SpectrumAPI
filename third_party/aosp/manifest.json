@@ -1,0 +1,117 @@
+{
+  "repositories": {
+    "frameworks/native": "4f463a6b1de9198963dc6aff74154a504ba3f8f6",
+    "system/core": "a3b721a32242006b59cb12bd62c9133632af3a2d",
+    "system/libbase": "6d19b5c690fa4220c10e42c2326150bbd4d4b7bb",
+    "system/logging": "bcac7c30d88a3773a7c0bc9f5617a23a886331fd"
+  },
+  "include_roots": [
+    "include"
+  ],
+  "seeds": [
+    "binder/Binder.h",
+    "binder/IServiceManager.h"
+  ],
+  "files": {
+    "frameworks/native/NOTICE": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/NOTICE?format=TEXT",
+      "sha256": "5f28c11f8b1b3f97b9d42c74b85371ebf4127f241b799279bcecd69f7ee542dc"
+    },
+    "frameworks/native/libs/binder/include/binder/Binder.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/Binder.h?format=TEXT",
+      "sha256": "b7c8226bfbb9702f888e8357e7357063d926e77c8152bb9606bf20533250d647"
+    },
+    "frameworks/native/libs/binder/include/binder/Common.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/Common.h?format=TEXT",
+      "sha256": "7ff4dfcb3b659dc352ebb12b1aaac014c44f8e9574308be37b19f5965c13c2be"
+    },
+    "frameworks/native/libs/binder/include/binder/IBinder.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/IBinder.h?format=TEXT",
+      "sha256": "db6f9a6478a5b67ef5ff6c06d2ef02b59a02e841aaae63dff40981444e4852ce"
+    },
+    "frameworks/native/libs/binder/include/binder/IInterface.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/IInterface.h?format=TEXT",
+      "sha256": "6c22f4af7c7b89940604ea123b9cdf436eb663f3eaabb8f8dbfc1e857ebf29c1"
+    },
+    "frameworks/native/libs/binder/include/binder/IServiceManager.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/IServiceManager.h?format=TEXT",
+      "sha256": "0809c753ac0a37f88165ee3aae108884ef17d8e7eaf7fe62952ebe1d1600be85"
+    },
+    "frameworks/native/libs/binder/include/binder/unique_fd.h": {
+      "url": "https://android.googlesource.com/platform/frameworks/native/+/4f463a6b1de9198963dc6aff74154a504ba3f8f6/libs/binder/include/binder/unique_fd.h?format=TEXT",
+      "sha256": "89ae0cb6bcb2517093128d25a9bea12311df436773b58f953b4ada2f510b46f1"
+    },
+    "system/core/libutils/binder/include/utils/Errors.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/Errors.h?format=TEXT",
+      "sha256": "001f9c16788f4dbe3a6d70f2a8e9b55d6928f91e086de498d86ad327d869ff19"
+    },
+    "system/core/libutils/binder/include/utils/LightRefBase.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/LightRefBase.h?format=TEXT",
+      "sha256": "69e4814a1fb150b747bfff3a144535c6cc8584e037a2b847b7b719c1a75e94f1"
+    },
+    "system/core/libutils/binder/include/utils/RefBase.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/RefBase.h?format=TEXT",
+      "sha256": "58949eeb23be4e5ff91c4904d9c643e6ed9b9f96a0b789b5aa04f679602c0373"
+    },
+    "system/core/libutils/binder/include/utils/String16.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/String16.h?format=TEXT",
+      "sha256": "b2598b3e9169ab03e8413a029362ff18cace43f3d78e567499087b72b5bf23b6"
+    },
+    "system/core/libutils/binder/include/utils/String8.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/String8.h?format=TEXT",
+      "sha256": "c763629bd69fe6959a9c5b1cdb5cf12ffb5fadbb230aa68b126c913de5d0afbb"
+    },
+    "system/core/libutils/binder/include/utils/StrongPointer.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/StrongPointer.h?format=TEXT",
+      "sha256": "992b24f3902fc8540021cd14f65b4a18c36101a4c34ff5e4b6a3857f33e7b6d2"
+    },
+    "system/core/libutils/binder/include/utils/TypeHelpers.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/TypeHelpers.h?format=TEXT",
+      "sha256": "36973dcbd99139f3af9c1d4a9487d1e0315c0c2555eebd6aecedd2185ee27107"
+    },
+    "system/core/libutils/binder/include/utils/Unicode.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/Unicode.h?format=TEXT",
+      "sha256": "ddd4c6cee350ada5e9a5e22412219f29eb690612c0eee1567fe4909cc0c663cc"
+    },
+    "system/core/libutils/binder/include/utils/Vector.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/Vector.h?format=TEXT",
+      "sha256": "81aa7c328ab0c2722a2eec9d2979c85d519eeeab78d68cf58e566122f7613294"
+    },
+    "system/core/libutils/binder/include/utils/VectorImpl.h": {
+      "url": "https://android.googlesource.com/platform/system/core/+/a3b721a32242006b59cb12bd62c9133632af3a2d/libutils/binder/include/utils/VectorImpl.h?format=TEXT",
+      "sha256": "2c0d7bff0eb9e8aee019ec5c2a939951200104068ece641485014f0c5f4c2bf2"
+    },
+    "system/libbase/include/android-base/unique_fd.h": {
+      "url": "https://android.googlesource.com/platform/system/libbase/+/6d19b5c690fa4220c10e42c2326150bbd4d4b7bb/include/android-base/unique_fd.h?format=TEXT",
+      "sha256": "670ee4419c5f8768121fc8dbcffa88b861e05a5a6e5adfb96dec0746e8c5db84"
+    },
+    "system/logging/liblog/include/log/log.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log.h?format=TEXT",
+      "sha256": "a88a797a352663075686bc6e3bf76675e1606367eaf12efd70f75706b84a595c"
+    },
+    "system/logging/liblog/include/log/log_id.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_id.h?format=TEXT",
+      "sha256": "c905e4e217e2bc389c0ae2d9a489ead7fbe9aef649f7d036bb8688be1ea9dd5d"
+    },
+    "system/logging/liblog/include/log/log_main.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_main.h?format=TEXT",
+      "sha256": "e402f10ca5457d85d231c831ca0daca6ab0dd22b2564dad924c2194e1132fb5c"
+    },
+    "system/logging/liblog/include/log/log_radio.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_radio.h?format=TEXT",
+      "sha256": "b84f5357c3d5cacdd034b28c67a7a3d69ee9d3dae39be9175660ed44afc5edf5"
+    },
+    "system/logging/liblog/include/log/log_safetynet.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_safetynet.h?format=TEXT",
+      "sha256": "3381a2b153f0542a47202e0230daf9d30b68b04e970690c2947940dc05312cfa"
+    },
+    "system/logging/liblog/include/log/log_system.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_system.h?format=TEXT",
+      "sha256": "35e31b751960fd45760546baa1e6b1ae5cc0f3c25d5b292c50e1487dd36670f0"
+    },
+    "system/logging/liblog/include/log/log_time.h": {
+      "url": "https://android.googlesource.com/platform/system/logging/+/bcac7c30d88a3773a7c0bc9f5617a23a886331fd/liblog/include/log/log_time.h?format=TEXT",
+      "sha256": "ba916f8fa49be1db30aeb6cbff4f7323164e0e327cfdecf7e1dc95b7f9491d9c"
+    }
+  }
+}

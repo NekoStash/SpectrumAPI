@@ -1,0 +1,62 @@
+SpectrumAPI third-party source notices
+======================================
+
+SpectrumAPI's own code is licensed under GPL-3.0-only (see the repository's
+LICENSE). The third-party material described below retains its upstream terms.
+
+AOSP platform headers
+---------------------
+The unmodified files under aosp/include originate from The Android Open Source
+Project. Each file retains its original copyright and Apache License, Version
+2.0 notice. The complete upstream notice and Apache license text are preserved
+in aosp/licenses/frameworks/native/NOTICE.
+
+Immutable upstream revisions:
+  platform/frameworks/native  4f463a6b1de9198963dc6aff74154a504ba3f8f6
+  platform/system/core        a3b721a32242006b59cb12bd62c9133632af3a2d
+  platform/system/libbase     6d19b5c690fa4220c10e42c2326150bbd4d4b7bb
+  platform/system/logging     bcac7c30d88a3773a7c0bc9f5617a23a886331fd
+
+Source repositories: https://android.googlesource.com/platform/
+The exact source URL and SHA-256 for each downloaded file are recorded in
+ aosp/manifest.json. tools/vendor_platform_headers.py reproduces the closure.
+These are build-time declarations only; no platform runtime library is copied
+into the distributable module by this vendoring process.
+
+Zygisk Next API (build-only upstream download)
+---------------------------------------------
+Copyright 2024-2026 Zygisk Next developers. All rights reserved.
+Upstream: https://github.com/LSPosed/ZygiskNext
+Revision: db994f8caebd440eedd02beab38ca62f3d1f8a2a
+Header: https://raw.githubusercontent.com/LSPosed/ZygiskNext/db994f8caebd440eedd02beab38ca62f3d1f8a2a/zygisk_next_api.h
+
+The upstream repository provides no separate license for its API header. Its
+README reserves all rights and prohibits modification, redistribution, picking
+components, and successor claims. It must not be described as Apache-licensed
+or as covered by the earlier GPL license for Zygisk Next.
+
+No copy of that header is included in this source tree or release archive.
+An explicit --zygisk invocation of tools/vendor_platform_headers.py retrieves
+its complete, unmodified API version 4 header from the fixed upstream commit
+into ignored build/vendor/zygisk-next/ for local compilation only. The original
+API fields, including runtime and HyperOS callbacks, are retained in full.
+The provenance and digest are recorded in zygisk_next_api.json. Obtain the
+upstream owner's permission before redistributing any restricted upstream file.
+No Zygisk Next runtime implementation or binary is vendored here.
+
+Optional Xposed APK dependencies and display reference
+----------------------------------------------------
+Only the optional Manager APK uses RoxyHook, LibXposed, miuix and the
+HyperSpectrum display adaptation. They are not part of the pure-Java SDK AAR
+or the native capture implementation. Their attribution and Apache-2.0 license
+texts are packaged in the APK under assets/open_source_licenses/.
+
+RoxyHook: NekoStash/RoxyHook, published JitPack commit 24b1267db5.
+LibXposed: libxposed API/service 102.0.0; API is compile-only.
+miuix: compose-miuix-ui/miuix 0.9.4, Maven Central.
+HyperSpectrum: wxxsfxyzm/HyperSpectrum at
+cff6b634b34614531a5a9ce7cc96bf43bc7e3efa. Only display response, motion,
+rendering and island compatibility ideas/code are adapted; no Visualizer,
+reference FFT, native audio capture or volume/AGC compensation is included.
+The six bars project source-band total power; they do not reconstruct the
+reference implementation's raw FFT.

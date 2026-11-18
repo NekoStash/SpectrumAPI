@@ -1,0 +1,1 @@
+path=/system/bin/audioserver lib/libspectrum_payload.so

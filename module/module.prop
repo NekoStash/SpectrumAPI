@@ -1,0 +1,6 @@
+id=spectrumapi
+name=SpectrumAPI
+version=0.1.0
+versionCode=1
+author=SpectrumAPI contributors
+description=Per-session media audio spectrum API for arm64 Android 17 (API 37). Requires Zygisk Next; device compatibility is not yet verified.

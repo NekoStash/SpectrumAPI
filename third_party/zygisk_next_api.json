@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/LSPosed/ZygiskNext",
+  "revision": "db994f8caebd440eedd02beab38ca62f3d1f8a2a",
+  "url": "https://raw.githubusercontent.com/LSPosed/ZygiskNext/db994f8caebd440eedd02beab38ca62f3d1f8a2a/zygisk_next_api.h",
+  "sha256": "957922aeec1bb31091cc37dca29267b7fa41e4e109f679af1526ee4c5e4325c8",
+  "license": "All rights reserved; no separate API-header license is provided upstream. See NOTICE."
+}

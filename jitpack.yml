@@ -1,0 +1,8 @@
+jdk:
+  - openjdk21
+before_install:
+  - python3 tools/ci.py prepare-sdk --sdk-only
+install:
+  # JitPack collects these two release publications from its Maven local repo.
+  # Neither Manager, signing tasks, Roxy nor native builds are included.
+  - bash ./gradlew -PspectrumSdkOnly=true publishSdkToMavenLocal --no-configuration-cache --no-daemon --console=plain

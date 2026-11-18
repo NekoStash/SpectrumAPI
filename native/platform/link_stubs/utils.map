@@ -1,0 +1,7 @@
+{
+    global:
+        _ZNK7android7RefBase9decStrongEPKv;
+        _ZNK7android8String164sizeEv;
+        _ZN7android14sp_report_raceEv;
+    local: *;
+};

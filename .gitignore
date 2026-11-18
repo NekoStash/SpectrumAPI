@@ -1,0 +1,26 @@
+# Local tooling and machine configuration
+.gradle/
+.idea/
+.narrafork/
+local.properties
+*.iml
+*.log
+.DS_Store
+
+# Generated build outputs
+**/build/
+**/.cxx/
+**/.externalNativeBuild/
+**/CMakeFiles/
+CMakeCache.txt
+CMakeUserPresets.json
+/dist/
+__pycache__/
+
+# Never commit production signing material or local credentials
+/release-key.jks
+/signing.properties
+*.jks
+*.keystore
+*.p12
+*.pfx

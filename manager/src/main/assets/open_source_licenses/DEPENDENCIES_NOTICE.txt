@@ -1,0 +1,36 @@
+SpectrumAPI optional Xposed APK - dependency attribution
+========================================================
+
+SpectrumAPI's own code is licensed under GPL-3.0-only (see GPL-3.0.txt).
+This APK also uses the following separately developed Apache-2.0 components.
+The complete Apache License, Version 2.0 is provided in Apache-2.0.txt.
+Their use does not imply endorsement by their upstream authors.
+
+RoxyHook
+  Upstream: https://github.com/NekoStash/RoxyHook
+  Authors: RoxyHook contributors / NekoStash
+  Published JitPack version: 24b1267db5
+  Coordinates: com.github.NekoStash.RoxyHook
+  Runtime and build-time annotation processor/plugin are resolved from published
+  artifacts. No local RoxyHook source build is used.
+
+LibXposed
+  Upstream: https://github.com/libxposed/api
+            https://github.com/libxposed/service
+  Authors: libxposed contributors
+  API/service version: 102.0.0
+  API is compile-only; the optional settings APK uses the remote service API.
+
+miuix
+  Upstream: https://github.com/compose-miuix-ui/miuix
+  Authors: compose-miuix-ui contributors
+  Maven Central version: 0.9.4
+  Coordinates: top.yukonga.miuix.kmp:miuix-ui and miuix-preference
+
+HyperSpectrum's upstream notices and SpectrumAPI adaptation attribution are
+preserved in HyperSpectrum_NOTICE.txt; Apache-2.0.txt supplies its license text.
+The source-band power projection is an adaptation, not a reconstruction of
+upstream raw FFT data.
+
+The pure-Java SDK and protocol AARs do not include these optional-app runtime
+components. The native module remains responsible for PCM capture and DSP.

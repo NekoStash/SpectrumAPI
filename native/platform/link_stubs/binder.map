@@ -1,0 +1,7 @@
+LIBBINDER {
+    global:
+        _ZN7android7BBinder11wasParceledEv;
+        _ZN7android7BBinder12getExtensionEv;
+        _ZN7android7BBinder12setExtensionERKNS_2spINS_7IBinderEEE;
+    local: *;
+};

@@ -1,0 +1,85 @@
+name: Build and upload packages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.repository == 'NekoStash/SpectrumAPI' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: gradle/actions/setup-gradle@017a9effdb900e5b5b2fddfb590a105619dca3c3 # v4.4.2, GitHub Docs verified
+        with:
+          cache-disabled: true
+      - name: Install and verify exact Android packages
+        run: python tools/ci.py prepare-sdk
+      - name: Restore and validate the production signing identity
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ vars.RELEASE_CERT_SHA256 }}
+        run: python tools/ci.py restore-key
+      - name: Build and verify the module ZIP and both APKs
+        env:
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+          RELEASE_CERT_SHA256: ${{ vars.RELEASE_CERT_SHA256 }}
+        run: >-
+          python tools/build.py --variant both --platform-link-mode stubs
+          --cmake "$ANDROID_HOME/cmake/3.22.1/bin/cmake"
+      - name: Remove signing material, even on failure
+        if: always()
+        run: python tools/ci.py cleanup-key
+      - name: Stage verified packages from this run
+        run: python tools/ci.py stage-dist --channel both
+      - name: Upload module ZIP, Debug APK and signed Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrum-build-${{ github.sha }}
+          path: build/ci-upload/artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Release R8 mapping separately (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrum-r8-check-${{ github.sha }}
+          path: |
+            manager/build/outputs/mapping/release/mapping.txt
+            manager/build/outputs/mapping/release/configuration.txt
+            manager/build/outputs/spectrum/release-build-contract.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload allowlisted verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spectrum-check-reports-${{ github.sha }}
+          path: |
+            build/reports/spectrum/*.json
+            manager/build/reports/lint-results-*.html
+            manager/build/reports/lint-results-*.xml
+          if-no-files-found: warn
+          retention-days: 14
