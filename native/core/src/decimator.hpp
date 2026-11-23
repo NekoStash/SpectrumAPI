@@ -27,23 +27,30 @@ struct DecimatedBlock {
     std::size_t firstInputFrame = 0;
 };
 
-class Decimator {
+template<typename Sample>
+struct FirCoefficients;
+
+template<typename Sample>
+class BasicDecimator {
 public:
-    explicit Decimator(FirProfile profile, std::uint32_t channels);
+    explicit BasicDecimator(FirProfile profile, std::uint32_t channels);
     void reset() noexcept;
-    DecimatedBlock process(std::span<const double> interleaved,
-                           std::span<double> output) noexcept;
+    DecimatedBlock process(std::span<const Sample> interleaved,
+                           std::span<Sample> output) noexcept;
     unsigned divisor() const noexcept { return plan_->divisor; }
 private:
     template<bool Sparse, std::uint32_t Channels>
-    DecimatedBlock processBlock(std::span<const double> interleaved,
-                                std::span<double> output) noexcept;
+    DecimatedBlock processBlock(std::span<const Sample> interleaved,
+                                std::span<Sample> output) noexcept;
     const FirPlan* plan_;
+    const FirCoefficients<Sample>* coefficients_;
     std::uint32_t channels_;
     std::size_t position_ = 0;
     unsigned phase_ = 0;
     // Mirroring removes wraparound from the convolution's hot loop.
-    std::array<std::array<double, 386>, 2> history_{};
+    std::array<std::array<Sample, 386>, 2> history_{};
 };
+
+using Decimator = BasicDecimator<double>;
 
 } // namespace spectrum::detail

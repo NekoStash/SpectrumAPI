@@ -79,6 +79,8 @@ struct PipelineCounters {
 
 std::size_t fftSizeForRate(int rateHz) noexcept;
 
+enum class DspBackend { LegacyDouble, Float32 };
+
 // One instance per captured Track. All calls belong to the existing worker;
 // nothing here runs on the AudioFlinger real-time thread.
 class SourcePipeline {
@@ -91,6 +93,7 @@ public:
     SourcePipeline& operator=(const SourcePipeline&) = delete;
 
     bool configure(SourceFormat source, std::string& reason);
+    bool configure(SourceFormat source, std::string& reason, DspBackend backend);
     // Exact actual rates already selected by the session. Empty means no FFT/FIR.
     // Retains unchanged nodes; changing bands/cadence must not reset source state.
     bool setRates(std::span<const int> ratesHz, std::string& reason);

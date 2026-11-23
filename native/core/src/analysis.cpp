@@ -9,7 +9,9 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #if defined(__aarch64__)
@@ -61,7 +63,8 @@ struct WaveformHistory {
         pendingStatus = status;
     }
 
-    std::uint64_t append(std::span<const double> samples, std::uint32_t channels,
+    template<typename Sample>
+    std::uint64_t append(std::span<const Sample> samples, std::uint32_t channels,
                          std::uint32_t rate, std::uint64_t firstSequence) noexcept {
         std::uint64_t completed = 0;
         const auto frames = samples.size() / channels;
@@ -82,19 +85,39 @@ struct WaveformHistory {
             auto maximum = current.maximum;
             std::size_t i = 0;
 #if defined(__aarch64__)
-            auto low = vdupq_n_f64(minimum);
-            auto high = vdupq_n_f64(maximum);
-            for (; i + 2 <= values.size(); i += 2) {
-                const auto value = vld1q_f64(values.data() + i);
-                low = vminq_f64(low, value);
-                high = vmaxq_f64(high, value);
+            if constexpr (std::is_same_v<Sample, float>) {
+                auto low = vdupq_n_f32(static_cast<float>(minimum));
+                auto high = vdupq_n_f32(static_cast<float>(maximum));
+                for (; i + 4 <= values.size(); i += 4) {
+                    const auto value = vld1q_f32(values.data() + i);
+                    low = vminq_f32(low, value);
+                    high = vmaxq_f32(high, value);
+                }
+                auto lowPair = vmin_f32(vget_low_f32(low), vget_high_f32(low));
+                auto highPair = vmax_f32(vget_low_f32(high), vget_high_f32(high));
+                if (i + 2 <= values.size()) {
+                    const auto value = vld1_f32(values.data() + i);
+                    lowPair = vmin_f32(lowPair, value);
+                    highPair = vmax_f32(highPair, value);
+                    i += 2;
+                }
+                minimum = vget_lane_f32(vpmin_f32(lowPair, lowPair), 0);
+                maximum = vget_lane_f32(vpmax_f32(highPair, highPair), 0);
+            } else {
+                auto low = vdupq_n_f64(minimum);
+                auto high = vdupq_n_f64(maximum);
+                for (; i + 2 <= values.size(); i += 2) {
+                    const auto value = vld1q_f64(values.data() + i);
+                    low = vminq_f64(low, value);
+                    high = vmaxq_f64(high, value);
+                }
+                minimum = vminvq_f64(low);
+                maximum = vmaxvq_f64(high);
             }
-            minimum = vminvq_f64(low);
-            maximum = vmaxvq_f64(high);
 #endif
             for (; i < values.size(); ++i) {
-                minimum = std::min(minimum, values[i]);
-                maximum = std::max(maximum, values[i]);
+                minimum = std::min(minimum, static_cast<double>(values[i]));
+                maximum = std::max(maximum, static_cast<double>(values[i]));
             }
             current.minimum = minimum;
             current.maximum = maximum;
@@ -114,6 +137,7 @@ struct WaveformHistory {
     }
 };
 
+template<typename Sample>
 struct RatePipeline {
     int rateHz = 0;
     std::uint32_t channels = 0;
@@ -123,9 +147,9 @@ struct RatePipeline {
     std::uint64_t endSourceSequence = 0;
     std::uint64_t transformedEnd = 0;
     bool hasPower = false;
-    std::unique_ptr<detail::Decimator> terminal;
-    detail::RealFft fft;
-    std::vector<double> ring;
+    std::unique_ptr<detail::BasicDecimator<Sample>> terminal;
+    detail::BasicRealFft<Sample> fft;
+    std::vector<Sample> ring;
     std::vector<double> powers;
 
     bool prepare(int rate, unsigned factor, std::uint32_t channelCount, std::string& reason) {
@@ -136,7 +160,7 @@ struct RatePipeline {
         powers.assign(size / 2 + 1, 0.0);
         if (!fft.configure(size, reason)) return false;
         if (factor != 1) {
-            terminal = std::make_unique<detail::Decimator>(
+            terminal = std::make_unique<detail::BasicDecimator<Sample>>(
                 factor == 3 || factor == 6 ? detail::FirProfile::D3 : detail::FirProfile::D2,
                 channels);
         }
@@ -154,7 +178,7 @@ struct RatePipeline {
         hasPower = false;
     }
 
-    void accept(std::span<const double> values, std::uint64_t firstSourceEnd,
+    void accept(std::span<const Sample> values, std::uint64_t firstSourceEnd,
                 std::uint64_t sourceStride) noexcept {
         const auto frames = values.size() / channels;
         if (frames == 0) return;
@@ -169,10 +193,18 @@ struct RatePipeline {
                 auto* right = ring.data() + size + write;
                 std::size_t i = 0;
 #if defined(__aarch64__)
-                for (; i + 2 <= count; i += 2) {
-                    const auto pair = vld2q_f64(input + i * 2);
-                    vst1q_f64(left + i, pair.val[0]);
-                    vst1q_f64(right + i, pair.val[1]);
+                if constexpr (std::is_same_v<Sample, float>) {
+                    for (; i + 4 <= count; i += 4) {
+                        const auto pair = vld2q_f32(input + i * 2);
+                        vst1q_f32(left + i, pair.val[0]);
+                        vst1q_f32(right + i, pair.val[1]);
+                    }
+                } else {
+                    for (; i + 2 <= count; i += 2) {
+                        const auto pair = vld2q_f64(input + i * 2);
+                        vst1q_f64(left + i, pair.val[0]);
+                        vst1q_f64(right + i, pair.val[1]);
+                    }
                 }
 #endif
                 for (; i < count; ++i) {
@@ -188,16 +220,74 @@ struct RatePipeline {
     }
 };
 
+template<typename Sample>
 struct SampleBlock {
-    std::span<const double> values;
+    std::span<const Sample> values;
     std::uint64_t firstSourceEnd;
     std::uint64_t sourceStride;
 };
 
+template<typename Sample>
 struct DecimationWorkspace {
-    std::array<double, kDecodeFrames> half;
-    std::array<double, kDecodeFrames / 2> quarter;
-    std::array<double, kDecodeFrames> terminal;
+    std::array<Sample, kDecodeFrames> half;
+    std::array<Sample, kDecodeFrames / 2> quarter;
+    std::array<Sample, kDecodeFrames> terminal;
+};
+
+template<typename Sample>
+struct PipelineDsp {
+    using SampleType = Sample;
+    using Decimator = detail::BasicDecimator<Sample>;
+    using Workspace = DecimationWorkspace<Sample>;
+    using Rate = RatePipeline<Sample>;
+
+    // Fixed paths only: source -> H2 -> H2, with D2/D3 terminal branches.
+    std::unique_ptr<Decimator> half1;
+    std::unique_ptr<Decimator> half2;
+    std::unique_ptr<Workspace> workspace;
+    std::array<std::unique_ptr<Rate>, kFactors.size()> rates;
+    std::array<Sample, kDecodeFrames * 2> decoded{};
+    std::uint32_t channels;
+    std::uint64_t decimatorOutputFrames = 0;
+
+    explicit PipelineDsp(std::uint32_t channelCount) : channels(channelCount) {}
+
+    void reset() noexcept {
+        if (half1) half1->reset();
+        if (half2) half2->reset();
+        for (auto& rate : rates) if (rate) rate->reset();
+    }
+
+    SampleBlock<Sample> decimate(Decimator& node, SampleBlock<Sample> input,
+                                 std::span<Sample> output) noexcept {
+        const auto block = node.process(input.values, output);
+        decimatorOutputFrames += block.frames;
+        return {output.first(block.frames * channels),
+                input.firstSourceEnd + block.firstInputFrame * input.sourceStride,
+                input.sourceStride * node.divisor()};
+    }
+
+    void terminal(std::size_t index, SampleBlock<Sample> input) noexcept {
+        if (!rates[index]) return;
+        auto& rate = *rates[index];
+        const auto output = decimate(*rate.terminal, input, workspace->terminal);
+        rate.accept(output.values, output.firstSourceEnd, output.sourceStride);
+    }
+
+    void accept(std::span<const Sample> values, std::uint64_t firstSourceEnd) noexcept {
+        const SampleBlock<Sample> input{values, firstSourceEnd, 1};
+        if (rates[0]) rates[0]->accept(values, firstSourceEnd, 1); // SOURCE: no FIR.
+        terminal(1, input); // D2.
+        terminal(2, input); // D3.
+        if (!half1) return;
+        const auto halfOutput = decimate(*half1, input, workspace->half);
+        if (halfOutput.values.empty()) return;
+        terminal(3, halfOutput); // H2 -> D2.
+        terminal(4, halfOutput); // H2 -> D3.
+        if (!half2) return;
+        const auto quarterOutput = decimate(*half2, halfOutput, workspace->quarter);
+        if (!quarterOutput.values.empty()) terminal(5, quarterOutput); // H2 -> H2 -> D2.
+    }
 };
 
 } // namespace
@@ -211,65 +301,40 @@ std::size_t fftSizeForRate(int rateHz) noexcept {
 }
 
 struct SourcePipeline::State {
+    using DoubleDsp = std::unique_ptr<PipelineDsp<double>>;
+    using FloatDsp = std::unique_ptr<PipelineDsp<float>>;
+    using Dsp = std::variant<DoubleDsp, FloatDsp>;
+    using WaveformScratch = std::array<float, kDecodeFrames * 2>;
+
     SourceFormat source;
     std::size_t frameBytes;
     SourceStatistics inputStats;
     std::unique_ptr<WaveformHistory> waveform;
-    // Fixed paths only: source -> H2 -> H2, with D2/D3 terminal branches.
-    std::unique_ptr<detail::Decimator> half1;
-    std::unique_ptr<detail::Decimator> half2;
-    std::unique_ptr<DecimationWorkspace> workspace;
-    std::array<std::unique_ptr<RatePipeline>, kFactors.size()> rates;
-    std::array<double, kDecodeFrames * 2> decoded{};
+    std::unique_ptr<WaveformScratch> unscaledF32;
+    Dsp dsp;
     std::uint64_t sequence = 0;
     std::uint64_t epoch = 1;
     std::uint64_t captureEndNs = 0;
     bool hasSequence = false;
     PipelineCounters counters;
 
-    explicit State(SourceFormat input)
-        : source(input), frameBytes(detail::pcmSampleBytes(input.format) * input.channels) {}
+    State(SourceFormat input, DspBackend backend)
+        : source(input), frameBytes(detail::pcmSampleBytes(input.format) * input.channels),
+          dsp(backend == DspBackend::Float32 ? Dsp{std::make_unique<PipelineDsp<float>>(input.channels)}
+                                            : Dsp{std::make_unique<PipelineDsp<double>>(input.channels)}) {}
+
+    template<typename Action>
+    decltype(auto) visit(Action&& action) {
+        return std::visit([&](auto& pipeline) -> decltype(auto) { return action(*pipeline); }, dsp);
+    }
 
     void reset(std::uint64_t next, WaveformStatus status) noexcept {
         inputStats = {};
         if (waveform) waveform->reset(status);
-        if (half1) half1->reset();
-        if (half2) half2->reset();
-        for (auto& rate : rates) if (rate) rate->reset();
+        visit([](auto& pipeline) { pipeline.reset(); });
         sequence = next;
         captureEndNs = 0;
         hasSequence = true;
-    }
-
-    SampleBlock decimate(detail::Decimator& node, SampleBlock input,
-                         std::span<double> output) noexcept {
-        const auto block = node.process(input.values, output);
-        counters.decimatorOutputFrames += block.frames;
-        return {output.first(block.frames * source.channels),
-                input.firstSourceEnd + block.firstInputFrame * input.sourceStride,
-                input.sourceStride * node.divisor()};
-    }
-
-    void terminal(std::size_t index, SampleBlock input) noexcept {
-        if (!rates[index]) return;
-        auto& rate = *rates[index];
-        const auto output = decimate(*rate.terminal, input, workspace->terminal);
-        rate.accept(output.values, output.firstSourceEnd, output.sourceStride);
-    }
-
-    void accept(std::span<const double> values, std::uint64_t firstSourceEnd) noexcept {
-        const SampleBlock input{values, firstSourceEnd, 1};
-        if (rates[0]) rates[0]->accept(values, firstSourceEnd, 1); // SOURCE: no FIR.
-        terminal(1, input); // D2.
-        terminal(2, input); // D3.
-        if (!half1) return;
-        const auto halfOutput = decimate(*half1, input, workspace->half);
-        if (halfOutput.values.empty()) return;
-        terminal(3, halfOutput); // H2 -> D2.
-        terminal(4, halfOutput); // H2 -> D3.
-        if (!half2) return;
-        const auto quarterOutput = decimate(*half2, halfOutput, workspace->quarter);
-        if (!quarterOutput.values.empty()) terminal(5, quarterOutput); // H2 -> H2 -> D2.
     }
 
     std::uint64_t timeForSequence(std::uint64_t end) const noexcept {
@@ -284,6 +349,18 @@ SourcePipeline::SourcePipeline(SourcePipeline&&) noexcept = default;
 SourcePipeline& SourcePipeline::operator=(SourcePipeline&&) noexcept = default;
 
 bool SourcePipeline::configure(SourceFormat source, std::string& reason) {
+#if defined(SPECTRUM_DEFAULT_FLOAT32_DSP) && SPECTRUM_DEFAULT_FLOAT32_DSP
+    return configure(source, reason, DspBackend::Float32);
+#else
+    return configure(source, reason, DspBackend::LegacyDouble);
+#endif
+}
+
+bool SourcePipeline::configure(SourceFormat source, std::string& reason, DspBackend backend) {
+    if (backend != DspBackend::LegacyDouble && backend != DspBackend::Float32) {
+        reason = "unsupported DSP backend";
+        return false;
+    }
     if (!supportedSourceRate(source.sampleRate)) {
         reason = "source sampleRate must be 44100, 48000, 88200, 96000, 176400 or 192000";
         return false;
@@ -297,7 +374,7 @@ bool SourcePipeline::configure(SourceFormat source, std::string& reason) {
         return false;
     }
     try {
-        auto replacement = std::make_unique<State>(source);
+        auto replacement = std::make_unique<State>(source, backend);
         replacement->epoch = state_ ? state_->epoch + 1 : 1;
         state_.swap(replacement);
         reason.clear();
@@ -332,36 +409,41 @@ bool SourcePipeline::setRates(std::span<const int> requested, std::string& reaso
     const auto needsHalf2 = wanted[5];
     const auto needsWorkspace = wanted[1] || wanted[2] || needsHalf1;
     try {
-        // Prepare new nodes before changing the existing, live topology.
-        std::array<std::unique_ptr<RatePipeline>, kFactors.size()> additions;
-        std::unique_ptr<detail::Decimator> half1;
-        std::unique_ptr<detail::Decimator> half2;
-        std::unique_ptr<DecimationWorkspace> workspace;
-        if (needsWorkspace && !state.workspace) workspace = std::make_unique<DecimationWorkspace>();
-        if (needsHalf1 && !state.half1) {
-            half1 = std::make_unique<detail::Decimator>(detail::FirProfile::H2,
-                                                       state.source.channels);
-        }
-        if (needsHalf2 && !state.half2) {
-            half2 = std::make_unique<detail::Decimator>(detail::FirProfile::H2,
-                                                       state.source.channels);
-        }
-        for (std::size_t i = 0; i < wanted.size(); ++i) {
-            if (!wanted[i] || state.rates[i]) continue;
-            additions[i] = std::make_unique<RatePipeline>();
-            if (!additions[i]->prepare(static_cast<int>(state.source.sampleRate / kFactors[i]),
-                                       kFactors[i], state.source.channels, reason)) return false;
-        }
-        for (std::size_t i = 0; i < wanted.size(); ++i) {
-            if (!wanted[i]) state.rates[i].reset();
-            else if (additions[i]) state.rates[i] = std::move(additions[i]);
-        }
-        if (!needsHalf1) state.half1.reset();
-        else if (half1) state.half1 = std::move(half1);
-        if (!needsHalf2) state.half2.reset();
-        else if (half2) state.half2 = std::move(half2);
-        if (!needsWorkspace) state.workspace.reset();
-        else if (workspace) state.workspace = std::move(workspace);
+        if (!state.visit([&](auto& pipeline) {
+                using Dsp = std::remove_reference_t<decltype(pipeline)>;
+                using Rate = typename Dsp::Rate;
+                using Decimator = typename Dsp::Decimator;
+                using Workspace = typename Dsp::Workspace;
+                // Prepare new nodes before changing the existing, live topology.
+                std::array<std::unique_ptr<Rate>, kFactors.size()> additions;
+                std::unique_ptr<Decimator> half1;
+                std::unique_ptr<Decimator> half2;
+                std::unique_ptr<Workspace> workspace;
+                if (needsWorkspace && !pipeline.workspace) workspace = std::make_unique<Workspace>();
+                if (needsHalf1 && !pipeline.half1) {
+                    half1 = std::make_unique<Decimator>(detail::FirProfile::H2, state.source.channels);
+                }
+                if (needsHalf2 && !pipeline.half2) {
+                    half2 = std::make_unique<Decimator>(detail::FirProfile::H2, state.source.channels);
+                }
+                for (std::size_t i = 0; i < wanted.size(); ++i) {
+                    if (!wanted[i] || pipeline.rates[i]) continue;
+                    additions[i] = std::make_unique<Rate>();
+                    if (!additions[i]->prepare(static_cast<int>(state.source.sampleRate / kFactors[i]),
+                                               kFactors[i], state.source.channels, reason)) return false;
+                }
+                for (std::size_t i = 0; i < wanted.size(); ++i) {
+                    if (!wanted[i]) pipeline.rates[i].reset();
+                    else if (additions[i]) pipeline.rates[i] = std::move(additions[i]);
+                }
+                if (!needsHalf1) pipeline.half1.reset();
+                else if (half1) pipeline.half1 = std::move(half1);
+                if (!needsHalf2) pipeline.half2.reset();
+                else if (half2) pipeline.half2 = std::move(half2);
+                if (!needsWorkspace) pipeline.workspace.reset();
+                else if (workspace) pipeline.workspace = std::move(workspace);
+                return true;
+            })) return false;
         state.counters.ratePipelines = 0;
         state.counters.decimationNodes = static_cast<std::size_t>(needsHalf1) +
                                           static_cast<std::size_t>(needsHalf2);
@@ -384,8 +466,17 @@ bool SourcePipeline::setWaveformEnabled(bool enabled, std::string& reason) {
         return false;
     }
     try {
-        if (enabled && !state_->waveform) state_->waveform = std::make_unique<WaveformHistory>();
-        else if (!enabled) state_->waveform.reset();
+        if (enabled && !state_->waveform) {
+            auto history = std::make_unique<WaveformHistory>();
+            if (state_->source.format == PcmFormat::F32 &&
+                std::holds_alternative<State::FloatDsp>(state_->dsp)) {
+                state_->unscaledF32 = std::make_unique<State::WaveformScratch>();
+            }
+            state_->waveform = std::move(history);
+        } else if (!enabled) {
+            state_->waveform.reset();
+            state_->unscaledF32.reset();
+        }
         reason.clear();
         return true;
     } catch (const std::exception&) {
@@ -411,24 +502,37 @@ void SourcePipeline::ingest(const void* pcm, std::size_t frames,
     ++state.counters.decodedBlocks;
     state.counters.decodedFrames += frames;
     const auto* input = static_cast<const unsigned char*>(pcm);
-    std::size_t consumed = 0;
-    while (consumed < frames) {
-        const auto count = std::min(frames - consumed, kDecodeFrames);
-        const auto samples = std::span<double>{state.decoded}.first(count * state.source.channels);
-        const auto statistics = detail::decodePcm(state.source.format, input, samples,
-                                                  state.source.channels);
-        state.inputStats.energy += statistics.energy;
-        state.inputStats.peak = std::max(state.inputStats.peak, statistics.peak);
-        state.inputStats.frames += statistics.frames;
-        if (state.waveform) {
-            state.counters.waveformBuckets += state.waveform->append(
-                samples, state.source.channels, state.source.sampleRate, state.sequence);
+    state.visit([&](auto& pipeline) {
+        using Sample = typename std::remove_reference_t<decltype(pipeline)>::SampleType;
+        const auto channels = state.source.channels;
+        std::size_t consumed = 0;
+        while (consumed < frames) {
+            const auto count = std::min(frames - consumed, kDecodeFrames);
+            const auto samples = std::span<Sample>{pipeline.decoded}.first(count * channels);
+            std::span<const Sample> waveformSamples = samples;
+            SourceStatistics statistics;
+            if constexpr (std::is_same_v<Sample, float>) {
+                auto unscaled = state.unscaledF32 ? std::span<float>{*state.unscaledF32}.first(samples.size())
+                                                  : std::span<float>{};
+                statistics = detail::decodePcm(state.source.format, input, samples, channels, unscaled);
+                if (!unscaled.empty()) waveformSamples = unscaled;
+            } else {
+                statistics = detail::decodePcm(state.source.format, input, samples, channels);
+            }
+            state.inputStats.energy += statistics.energy;
+            state.inputStats.peak = std::max(state.inputStats.peak, statistics.peak);
+            state.inputStats.frames += statistics.frames;
+            if (state.waveform) {
+                state.counters.waveformBuckets += state.waveform->append(
+                    waveformSamples, channels, state.source.sampleRate, state.sequence);
+            }
+            pipeline.accept(samples, state.sequence + 1);
+            state.sequence += count;
+            consumed += count;
+            input += count * state.frameBytes;
         }
-        state.accept(samples, state.sequence + 1);
-        state.sequence += count;
-        consumed += count;
-        input += count * state.frameBytes;
-    }
+        state.counters.decimatorOutputFrames = pipeline.decimatorOutputFrames;
+    });
     state.captureEndNs = captureEndTimeNs;
 }
 
@@ -436,24 +540,31 @@ bool SourcePipeline::spectrum(int rateHz, SpectrumSnapshot& out) {
     out = {};
     if (!state_) return false;
     auto& state = *state_;
-    for (auto& entry : state.rates) {
-        if (!entry || entry->rateHz != rateHz) continue;
-        auto& rate = *entry;
-        if (rate.ready < rate.size) return false;
-        if (!rate.hasPower || rate.transformedEnd != rate.endSourceSequence) {
-            rate.fft.power(rate.ring, rate.write, rate.channels, rate.powers);
-            rate.transformedEnd = rate.endSourceSequence;
-            rate.hasPower = true;
-            ++state.counters.fftExecutions;
+    return state.visit([&](auto& pipeline) {
+        using Sample = typename std::remove_reference_t<decltype(pipeline)>::SampleType;
+        for (auto& entry : pipeline.rates) {
+            if (!entry || entry->rateHz != rateHz) continue;
+            auto& rate = *entry;
+            if (rate.ready < rate.size) return false;
+            if (!rate.hasPower || rate.transformedEnd != rate.endSourceSequence) {
+                double powerRestore = 1.0;
+                if constexpr (std::is_same_v<Sample, float>) {
+                    if (state.source.format == PcmFormat::F32) powerRestore = detail::kFloatDspF32PowerRestore;
+                }
+                rate.fft.power(rate.ring, rate.write, rate.channels, rate.powers, powerRestore);
+                rate.transformedEnd = rate.endSourceSequence;
+                rate.hasPower = true;
+                ++state.counters.fftExecutions;
+            }
+            out.rateHz = rate.rateHz;
+            out.fftSize = rate.size;
+            out.endSourceSequence = rate.endSourceSequence;
+            out.captureEndTimeNs = state.timeForSequence(rate.endSourceSequence);
+            out.powers = rate.powers;
+            return true;
         }
-        out.rateHz = rate.rateHz;
-        out.fftSize = rate.size;
-        out.endSourceSequence = rate.endSourceSequence;
-        out.captureEndTimeNs = state.timeForSequence(rate.endSourceSequence);
-        out.powers = rate.powers;
-        return true;
-    }
-    return false;
+        return false;
+    });
 }
 
 SourceStatistics SourcePipeline::inputStatistics() const noexcept {
