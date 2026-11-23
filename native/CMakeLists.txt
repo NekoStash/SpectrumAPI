@@ -91,5 +91,9 @@ target_link_libraries(spectrum_payload PRIVATE
     dl
 )
 spectrum_optimize(spectrum_payload)
+option(SPECTRUM_CAPTURE_PROFILING "Enable PCM ring and worker diagnostic counters" OFF)
+if(SPECTRUM_CAPTURE_PROFILING)
+    target_compile_definitions(spectrum_payload PRIVATE SPECTRUM_CAPTURE_PROFILING=1)
+endif()
 target_link_options(spectrum_payload PRIVATE "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/payload.exports")
 set_property(TARGET spectrum_payload APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/payload.exports")

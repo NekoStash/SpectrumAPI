@@ -6,6 +6,10 @@
 #include <aidl/hk/uwu/spectrumapi/ipc/ISpectrumStateListener.h>
 #include <android/binder_ibinder.h>
 #include <android/sharedmem.h>
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+#include <android/log.h>
+#include <cinttypes>
+#endif
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <poll.h>
@@ -111,6 +115,18 @@ struct RawRing {
     uint32_t sourceRate = 0;
     alignas(64) std::atomic<uint64_t> head{0}, blockHead{0};
     alignas(64) std::atomic<uint64_t> tail{0}, blockTail{0};
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+    struct Profile {
+        // Frame ranges: 1–32, 33–64, ..., 1025–2048, then >2048.
+        std::array<std::atomic<uint64_t>, 8> blocks{};
+        std::atomic<uint64_t> copies{0}, bytes{0}, highHits{0}, highEntries{0}, probes{0};
+        std::atomic<uint64_t> peakFrames{0};
+        bool wasHigh = false;
+        // Only the worker updates or reads these counters.
+        uint64_t bandProjects = 0, bandProjectNs = 0;
+    };
+    alignas(64) Profile profile;
+#endif
     bool prepare(uint32_t rate, size_t bytes) {
         const uint64_t wanted = (uint64_t(rate) * bytes + 9) / 10;
         allocation = 65536;
@@ -120,6 +136,10 @@ struct RawRing {
         return data != nullptr && capacityFrames != 0;
     }
     size_t push(const void* source, size_t frames, uint64_t firstSequence, uint64_t captureEnd) noexcept {
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+        const size_t bucket = std::min<size_t>(7, std::bit_width((frames - 1) >> 5));
+        profile.blocks[bucket].fetch_add(1, std::memory_order_relaxed);
+#endif
         const uint64_t entry = blockHead.load(std::memory_order_relaxed);
         if (entry - blockTail.load(std::memory_order_acquire) >= kBlocks) return 0;
         const uint64_t written = head.load(std::memory_order_relaxed);
@@ -131,6 +151,13 @@ struct RawRing {
         std::memcpy(data.get() + offset * frameBytes, source, first * frameBytes);
         if (first != count) std::memcpy(data.get(), static_cast<const std::byte*>(source) + first * frameBytes,
                                        (count - first) * frameBytes);
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+        profile.copies.fetch_add(1 + (first != count), std::memory_order_relaxed);
+        profile.bytes.fetch_add(count * frameBytes, std::memory_order_relaxed);
+        const auto occupancy = written + count - read;
+        if (occupancy > profile.peakFrames.load(std::memory_order_relaxed))
+            profile.peakFrames.store(occupancy, std::memory_order_relaxed);
+#endif
         blocks[size_t(entry % kBlocks)] = {firstSequence, earlierByFrames(captureEnd, frames - count, sourceRate), count};
         head.store(written + count, std::memory_order_release);
         blockHead.store(entry + 1, std::memory_order_release);
@@ -333,6 +360,10 @@ public:
     std::atomic<uint32_t> subscriptions{0};
     std::atomic<bool> wakePending{false};
     std::atomic<uint64_t> wakeAtNs{0};
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+    uint64_t eventWrites = 0, pollWakes = 0, workerPasses = 0, publishedFrames = 0, lastProfileNs = 0;
+    void reportCaptureProfile(uint64_t now) const noexcept;
+#endif
     int event = -1;
     AIBinder_DeathRecipient* deathRecipient = nullptr;
     uint32_t supportedModes = 0;
@@ -453,6 +484,13 @@ public:
             const size_t copied = ring->push(data, frames, firstSequence, timestamp);
             if (copied != frames) t.dropped.fetch_add(frames - copied, std::memory_order_relaxed);
             const bool highWater = ring->highWater();
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+            auto& profile = ring->profile;
+            profile.probes.fetch_add(size_t(&t - tracks.data()) + 1, std::memory_order_relaxed);
+            if (highWater) profile.highHits.fetch_add(1, std::memory_order_relaxed);
+            if (highWater && !profile.wasHigh) profile.highEntries.fetch_add(1, std::memory_order_relaxed);
+            profile.wasHigh = highWater;
+#endif
             t.unlockProducer();
             if (highWater || timestamp >= wakeAtNs.load(std::memory_order_relaxed)) wake();
             return;
@@ -724,7 +762,18 @@ void Engine::consumeAndPublish() {
             if (b->rate && !t.idle) {
                 SpectrumSnapshot snapshot;
                 if (t.pipeline.spectrum(b->rate, snapshot)) {
-                    if (b->spectrumEnd != snapshot.endSourceSequence) b->mapper.project(snapshot, b->powers);
+                    if (b->spectrumEnd != snapshot.endSourceSequence) {
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+                        const auto projectionStart = nowNs();
+#endif
+                        b->mapper.project(snapshot, b->powers);
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+                        if (t.ring) {
+                            ++t.ring->profile.bandProjects;
+                            t.ring->profile.bandProjectNs += nowNs() - projectionStart;
+                        }
+#endif
+                    }
                     b->spectrumEnd = snapshot.endSourceSequence; b->spectrumCaptureNs = snapshot.captureEndTimeNs;
                     b->spectrumReady = true; newestSpectrum = std::max(newestSpectrum, snapshot.captureEndTimeNs);
                 }
@@ -768,6 +817,9 @@ void Engine::consumeAndPublish() {
         const size_t covered = hasSpectrum(s->request) ? contributors : (waveReady ? size_t(1) : size_t(0));
         const uint32_t coverage = s->matched ? uint32_t(std::min(size_t(1000), covered * 1000 / s->matched)) : 0;
         s->region->publish(frame, state, coverage, lost, now);
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+        ++publishedFrames;
+#endif
         // Publishing consumes only this session's block accumulators, never another subscriber's data.
         for (auto& b : s->bindings) b->statistics = {};
         s->state = state; s->lastDropTotal = dropTotal;
@@ -798,6 +850,34 @@ void Engine::collectNotifications(std::vector<Notification>& out) {
         s->notifiedState = s->state; s->notifiedGeneration = s->generation;
     }
 }
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+void Engine::reportCaptureProfile(uint64_t now) const noexcept {
+    constexpr char tag[] = "SpectrumCapturePerf";
+    __android_log_print(ANDROID_LOG_INFO, tag,
+        "time_ns=%" PRIu64 " eventfd_writes=%" PRIu64 " poll_wakes=%" PRIu64
+        " worker_passes=%" PRIu64 " published_frames=%" PRIu64,
+        now, eventWrites, pollWakes, workerPasses, publishedFrames);
+    const auto load = [](const auto& counter) { return counter.load(std::memory_order_relaxed); };
+    for (const auto& t : tracks) {
+        if (!t.ring) continue;
+        const auto& p = t.ring->profile;
+        __android_log_print(ANDROID_LOG_INFO, tag,
+            "track=%" PRIu64 " rate=%u frame_bytes=%zu drop_frames=%" PRIu64
+            " copy_calls=%" PRIu64 " copy_bytes=%" PRIu64 " peak_frames=%" PRIu64
+            " high_hits=%" PRIu64 " high_entries=%" PRIu64 " lookup_probes=%" PRIu64
+            " blocks=[%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 "]",
+            t.token, t.rate, t.ring->frameBytes, load(t.dropped), load(p.copies), load(p.bytes),
+            load(p.peakFrames), load(p.highHits), load(p.highEntries), load(p.probes),
+            load(p.blocks[0]), load(p.blocks[1]), load(p.blocks[2]), load(p.blocks[3]),
+            load(p.blocks[4]), load(p.blocks[5]), load(p.blocks[6]), load(p.blocks[7]));
+        const auto dsp = t.pipeline.counters();
+        __android_log_print(ANDROID_LOG_INFO, tag,
+            "track=%" PRIu64 " bindings=%zu decoded_frames=%" PRIu64 " fft_executions=%" PRIu64
+            " band_projects=%" PRIu64 " band_project_wall_ns=%" PRIu64,
+            t.token, t.consumers.size(), dsp.decodedFrames, dsp.fftExecutions, p.bandProjects, p.bandProjectNs);
+    }
+}
+#endif
 void Engine::run() {
     uint64_t next = 0;
     for (;;) {
@@ -809,9 +889,16 @@ void Engine::run() {
             pollfd item{event, POLLIN, 0};
             int result;
             do { result = poll(&item, 1, timeout); } while (result < 0 && errno == EINTR);
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+            pollWakes += result > 0;
+#endif
         }
         uint64_t ignored;
-        while (::read(event, &ignored, sizeof(ignored)) == sizeof(ignored)) {}
+        while (::read(event, &ignored, sizeof(ignored)) == sizeof(ignored)) {
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+            eventWrites += ignored;
+#endif
+        }
         wakePending.store(false, std::memory_order_release);
         std::vector<Notification> notifications;
         {
@@ -828,6 +915,14 @@ void Engine::run() {
                 }
                 applied = change; reconciled.notify_all(); next = std::numeric_limits<uint64_t>::max();
             }
+#if defined(SPECTRUM_CAPTURE_PROFILING)
+            ++workerPasses;
+            const auto profileNow = nowNs();
+            if (profileNow - lastProfileNs >= 5 * kSecond) {
+                lastProfileNs = profileNow;
+                reportCaptureProfile(profileNow);
+            }
+#endif
             wakeAtNs.store(next == std::numeric_limits<uint64_t>::max() ? 0 : next, std::memory_order_release);
         }
         for (const auto& notice : notifications) (void)notice.listener->onStateChanged(notice.state, int64_t(notice.generation));
