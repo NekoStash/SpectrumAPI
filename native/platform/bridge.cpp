@@ -38,17 +38,21 @@ static_assert(sizeof(android::sp<Manager>) == sizeof(void*));
 static_assert(!std::is_trivially_destructible_v<android::sp<Manager>>);
 static_assert(std::is_same_v<decltype(&Manager::addService), AddServiceMember>);
 
+constexpr char kLogTag[] = "SpectrumPlatform";
 constexpr char kDefaultManagerSymbol[] = "_ZN7android21defaultServiceManagerEv";
 constexpr char kToPlatformBinderSymbol[] = "_Z25AIBinder_toPlatformBinderP8AIBinder";
 constexpr char16_t kServiceName[] = u"media.audio_flinger";
 constexpr size_t kServiceNameLength = (sizeof(kServiceName) / sizeof(char16_t)) - 1;
+// Android AArch64 Clang emits {0x30, 1} for &IServiceManager::addService with the
+// pinned frameworks/native headers (third_party/aosp/manifest.json).
+constexpr std::ptrdiff_t kAddServiceOffset = 0x30;
 constexpr size_t kMaxManagerSlots = 4;
 constexpr size_t kMaxCallerSlots = 32;
 
 pthread_mutex_t gBridgeMutex = PTHREAD_MUTEX_INITIALIZER;
 const ZygiskNextAPI* gBridgeApi = nullptr;
 std::atomic<bool> gBridgeActive{false};
-std::atomic<bool> gExtensionPublished{false};
+std::atomic<bool> gExtensionAttached{false};
 bool gExtensionTried = false;
 bool gBridgeInstallTried = false;
 size_t gVtableSlotOffset = 0;
@@ -69,16 +73,23 @@ std::array<DispatchSlot, kMaxCallerSlots> gCallerSlots{};
 class ScopedMutex final {
 public:
     explicit ScopedMutex(pthread_mutex_t& m) noexcept
-        : mutex_(m), locked_(pthread_mutex_lock(&m) == 0) {}
+        : mutex_(m), error_(pthread_mutex_lock(&m)) {}
     ~ScopedMutex() {
-        if (locked_) pthread_mutex_unlock(&mutex_);
+        if (!error_) pthread_mutex_unlock(&mutex_);
     }
-    explicit operator bool() const noexcept { return locked_; }
+    explicit operator bool() const noexcept { return error_ == 0; }
+    int error() const noexcept { return error_; }
 
 private:
     pthread_mutex_t& mutex_;
-    bool locked_;
+    int error_;
 };
+
+const char* addressImage(const void* addr) noexcept {
+    if (!addr) return "<null>";
+    Dl_info info{};
+    return dladdr(addr, &info) != 0 && info.dli_fname ? info.dli_fname : "<unknown image>";
+}
 
 size_t resolveAddServiceOffset() noexcept {
     const AddServiceMember member = &Manager::addService;
@@ -90,11 +101,16 @@ size_t resolveAddServiceOffset() noexcept {
     std::memcpy(&rep, &member, sizeof(member));
     std::ptrdiff_t offset = -1;
     if ((rep.fn & 1) != 0 && rep.adj == 0) {
-        offset = rep.fn - 1;
+        offset = rep.fn - 1; // Generic Itanium encoding: vtable byte offset + 1.
     } else if (rep.adj == 1) {
-        offset = rep.fn;
+        offset = rep.fn; // AArch64 encoding: virtual bit set, zero this adjustment.
     }
-    return offset == 0x30 ? static_cast<size_t>(offset) : 0;
+    if (offset == kAddServiceOffset) return static_cast<size_t>(offset);
+    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                        "[abi] IServiceManager::addService member pointer (%td,%td) "
+                        "does not encode the expected vtable offset %#zx with zero this adjustment",
+                        rep.fn, rep.adj, static_cast<size_t>(kAddServiceOffset));
+    return 0;
 }
 
 bool checkRequiredExports() noexcept {
@@ -113,12 +129,23 @@ bool checkRequiredExports() noexcept {
         {"_ZNK7android8String164sizeEv", "libutils.so"},
         {"_ZN7android14sp_report_raceEv", "libutils.so"},
     };
+    bool usable = true;
     for (const auto& spec : kSpecs) {
         void* addr = dlsym(RTLD_DEFAULT, spec.symbol);
+        if (!addr) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[exports] %s: %s not visible to dlsym(RTLD_DEFAULT)",
+                                spec.library, spec.symbol);
+            usable = false;
+            continue;
+        }
         if (!runtime::executableInLibrary(addr, spec.library)) {
-            __android_log_print(ANDROID_LOG_WARN, "SpectrumPlatform",
-                                "Missing platform symbol %s in %s", spec.symbol, spec.library);
-            return false;
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[exports] %s: %s resolved in %s but is not an aligned "
+                                "executable address in the expected library",
+                                spec.library, spec.symbol, addressImage(addr));
+            usable = false;
+            continue;
         }
         if (std::strcmp(spec.symbol, kDefaultManagerSymbol) == 0) {
             gDefaultFallback = reinterpret_cast<DefaultServiceManagerFn>(addr);
@@ -126,42 +153,59 @@ bool checkRequiredExports() noexcept {
             gToPlatformBinder = reinterpret_cast<ToPlatformBinderFn>(addr);
         }
     }
-    return gDefaultFallback != nullptr && gToPlatformBinder != nullptr;
+    return usable;
 }
 
-void maybeAttachAudioExtension(const android::String16& name,
+bool maybeAttachAudioExtension(const android::String16& name,
                                const android::sp<android::IBinder>& service) noexcept {
     if (!gBridgeActive.load(std::memory_order_acquire) ||
-        gExtensionPublished.load(std::memory_order_acquire)) {
-        return;
-    }
-    if (name.size() != kServiceNameLength ||
+        gExtensionAttached.load(std::memory_order_acquire) ||
+        name.size() != kServiceNameLength ||
         std::memcmp(name.c_str(), kServiceName, kServiceNameLength * sizeof(char16_t)) != 0) {
-        return;
+        return false;
     }
 
     ScopedMutex lock(gBridgeMutex);
-    if (!lock || gExtensionTried) return;
+    if (!lock) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[extension] cannot lock bridge for audio_flinger attachment: %d",
+                                lock.error());
+        }
+        return false;
+    }
+    if (gExtensionTried) return false;
     gExtensionTried = true;
 
+    const char* failure = nullptr;
     try {
-        if (!service || !gPlatformExtension) return;
-        android::BBinder* local = service->localBinder();
-        if (!local || local->wasParceled() || local->getExtension()) {
-            __android_log_print(ANDROID_LOG_WARN, "SpectrumPlatform",
-                                "AudioFlinger binder not eligible for pre-publication extension");
-            return;
-        }
-        local->setExtension(gPlatformExtension);
-        if (local->getExtension().get() == gPlatformExtension.get()) {
-            gExtensionPublished.store(true, std::memory_order_release);
-            __android_log_print(ANDROID_LOG_INFO, "SpectrumPlatform",
-                                "Attached Spectrum Binder extension to media.audio_flinger");
+        if (!service) {
+            failure = "registered binder is null";
+        } else if (!gPlatformExtension) {
+            failure = "platform extension binder was not initialized";
+        } else if (auto* local = service->localBinder(); !local) {
+            failure = "registered binder is not local";
+        } else if (local->wasParceled()) {
+            failure = "local binder was already parceled";
+        } else if (local->getExtension()) {
+            failure = "local binder already has an extension; leaving it unchanged";
+        } else {
+            local->setExtension(gPlatformExtension);
+            if (local->getExtension().get() == gPlatformExtension.get()) {
+                gExtensionAttached.store(true, std::memory_order_release);
+                __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                                    "[extension] attached to media.audio_flinger before registration");
+                return true;
+            }
+            failure = "setExtension read-back did not match";
         }
     } catch (...) {
-        __android_log_print(ANDROID_LOG_WARN, "SpectrumPlatform",
-                            "Exception while attaching Spectrum Binder extension");
+        failure = "exception during attachment";
     }
+    __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                        "[extension] media.audio_flinger attachment not confirmed: %s", failure);
+    return false;
 }
 
 template <size_t SlotIndex>
@@ -171,10 +215,26 @@ android::status_t onAddService(void* self, const android::String16& name,
     AddServiceFn nextFn = nullptr;
     {
         ScopedMutex lock(gBridgeMutex);
-        nextFn = reinterpret_cast<AddServiceFn>(gAddServiceSlots[SlotIndex].next);
+        if (lock) nextFn = reinterpret_cast<AddServiceFn>(gAddServiceSlots[SlotIndex].next);
+        if (!nextFn) {
+            static std::atomic_flag logged{};
+            if (!logged.test_and_set(std::memory_order_relaxed)) {
+                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                                    "[inline] cannot forward addService (slot=%zu, mutex error=%d): "
+                                    "no safe original; refusing to re-enter the patched target",
+                                    SlotIndex, lock.error());
+            }
+            return android::INVALID_OPERATION;
+        }
     }
-    maybeAttachAudioExtension(name, service);
-    return nextFn(self, name, service, allowIsolated, dumpsysFlags);
+    const bool attached = maybeAttachAudioExtension(name, service);
+    const auto status = nextFn(self, name, service, allowIsolated, dumpsysFlags);
+    if (attached) {
+        __android_log_print(status == android::OK ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
+                            kLogTag, "[extension] media.audio_flinger registration with extension "
+                                     "returned %d", status);
+    }
+    return status;
 }
 
 constexpr std::array<AddServiceFn, kMaxManagerSlots> kAddServiceCallbacks = {
@@ -182,13 +242,27 @@ constexpr std::array<AddServiceFn, kMaxManagerSlots> kAddServiceCallbacks = {
 };
 
 void bindServiceManagerInstance(const android::sp<Manager>& manager) noexcept {
-    if (!manager || !gBridgeActive.load(std::memory_order_acquire) ||
-        gExtensionPublished.load(std::memory_order_acquire)) {
+    if (!gBridgeActive.load(std::memory_order_acquire) ||
+        gExtensionAttached.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (!manager) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[manager] defaultServiceManager returned null; cannot bind addService");
+        }
         return;
     }
     const void* vtable = nullptr;
     std::memcpy(&vtable, static_cast<const void*>(manager.get()), sizeof(vtable));
     if (!runtime::mappedInLibrary(vtable, gVtableSlotOffset + sizeof(void*), "libbinder.so", PF_R)) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[manager] vtable in %s is not readable through slot %#zx in libbinder.so",
+                                addressImage(vtable), gVtableSlotOffset);
+        }
         return;
     }
     void* addServiceEntry = nullptr;
@@ -196,11 +270,24 @@ void bindServiceManagerInstance(const android::sp<Manager>& manager) noexcept {
                 static_cast<const uint8_t*>(vtable) + gVtableSlotOffset,
                 sizeof(addServiceEntry));
     if (!runtime::executableInLibrary(addServiceEntry, "libbinder.so")) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[manager] slot %#zx points into %s, not aligned executable code in libbinder.so",
+                                gVtableSlotOffset, addressImage(addServiceEntry));
+        }
         return;
     }
 
     ScopedMutex lock(gBridgeMutex);
-    if (!lock) return;
+    if (!lock) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[manager] cannot lock bridge to install addService hook: %d", lock.error());
+        }
+        return;
+    }
     for (const auto& slot : gAddServiceSlots) {
         if (slot.key == addServiceEntry) return;
     }
@@ -213,11 +300,33 @@ void bindServiceManagerInstance(const android::sp<Manager>& manager) noexcept {
             addServiceEntry, reinterpret_cast<void*>(kAddServiceCallbacks[i]), &next);
         if (rc == ZN_SUCCESS && next) {
             slot.next = next;
+            __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                                "[inline] bound IServiceManager::addService (slot %#zx, hook %zu)",
+                                gVtableSlotOffset, i);
         } else {
-            if (rc == ZN_SUCCESS) (void)gBridgeApi->inlineUnhook(addServiceEntry);
-            slot.next = addServiceEntry;
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[inline] addService hook %zu failed (rc=%d, trampoline=%s)",
+                                i, rc, next ? "present" : "missing");
+            if (rc == ZN_SUCCESS) {
+                const int rollback = gBridgeApi->inlineUnhook(addServiceEntry);
+                if (rollback == ZN_SUCCESS) {
+                    // A callback already in flight can now call the unpatched entry.
+                    slot.next = addServiceEntry;
+                } else {
+                    __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                                        "[rollback] addService hook %zu unhook failed (rc=%d); "
+                                        "no safe original for this callback", i, rollback);
+                }
+            }
         }
         return;
+    }
+    static bool capacityLogged = false; // Protected by gBridgeMutex.
+    if (!capacityLogged) {
+        capacityLogged = true;
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "[inline] all %zu addService hook slots used; skipping a new implementation",
+                            gAddServiceSlots.size());
     }
 }
 
@@ -244,23 +353,48 @@ constexpr auto kCallerCallbacks = makeCallerTable(std::make_index_sequence<kMaxC
 
 bool installPlatformBridge(const ZygiskNextAPI* api) noexcept {
     ScopedMutex lock(gBridgeMutex);
-    if (!lock) return false;
+    if (!lock) {
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed)) {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[init] cannot lock bridge for installation: %d", lock.error());
+        }
+        return false;
+    }
     if (gBridgeInstallTried) return gBridgeActive.load(std::memory_order_acquire);
     gBridgeInstallTried = true;
 
-    if (!api || !api->pltHook || !api->inlineHook || !api->inlineUnhook) return false;
+    if (!api || !api->pltHook || !api->inlineHook || !api->inlineUnhook) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "[init] Zygisk Next API lacks %s",
+                            !api ? "the hook API table" : !api->pltHook ? "pltHook" :
+                            !api->inlineHook ? "inlineHook" : "inlineUnhook");
+        return false;
+    }
     gBridgeApi = api;
     gVtableSlotOffset = resolveAddServiceOffset();
     if (!gVtableSlotOffset || !checkRequiredExports()) return false;
 
     auto ndkService = capture::createService();
-    if (!ndkService.get()) return false;
+    if (!ndkService.get()) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "[extension] capture::createService returned a null NDK Binder");
+        return false;
+    }
     auto platformExt = gToPlatformBinder(ndkService.get());
-    if (!platformExt) return false;
+    if (!platformExt) {
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "[extension] AIBinder_toPlatformBinder returned a null platform Binder");
+        return false;
+    }
 
+    size_t eligibleCount = 0;
+    size_t callerSlotsUsed = 0;
     size_t installedCount = 0;
     bool mainRequiresImport = false;
     bool mainInstalled = false;
+    bool capacityLogged = false;
+    bool partialRollbackFailed = false;
 
     runtime::forEachSystemImage([&](const RuntimeImage& image, const dl_phdr_info& phdr) noexcept {
         if (image.kind == RuntimeImageKind::SharedLibrary &&
@@ -269,44 +403,84 @@ bool installPlatformBridge(const ZygiskNextAPI* api) noexcept {
         }
         if (!runtime::hasPltImport(phdr, kDefaultManagerSymbol)) return true;
 
+        ++eligibleCount;
         if (image.kind == RuntimeImageKind::MainExecutable) mainRequiresImport = true;
-        if (installedCount >= gCallerSlots.size()) return true;
+        if (callerSlotsUsed == gCallerSlots.size()) {
+            if (!capacityLogged) {
+                capacityLogged = true;
+                __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                    "[plt] all %zu defaultServiceManager caller slots used; "
+                                    "first skipped image: %s", gCallerSlots.size(), image.path);
+            }
+            return true;
+        }
 
-        const size_t idx = installedCount;
+        const size_t idx = callerSlotsUsed;
         void* next = nullptr;
         const int rc = api->pltHook(
             image.base, kDefaultManagerSymbol,
             reinterpret_cast<void*>(kCallerCallbacks[idx]), &next);
+        // Even after rollback, no other image should reuse a callback that may be in flight.
+        if (rc == ZN_SUCCESS) ++callerSlotsUsed;
         if (rc == ZN_SUCCESS && next) {
             gCallerSlots[idx].key = image.base;
             __atomic_store_n(&gCallerSlots[idx].next, next, __ATOMIC_RELEASE);
             ++installedCount;
             if (image.kind == RuntimeImageKind::MainExecutable) mainInstalled = true;
-        } else if (rc == ZN_SUCCESS) {
-            (void)api->pltHook(image.base, kDefaultManagerSymbol,
-                               reinterpret_cast<void*>(gDefaultFallback), nullptr);
-        }
-        return true;
-    });
-
-    if (installedCount == 0 || (mainRequiresImport && !mainInstalled)) {
-        for (size_t i = installedCount; i > 0; --i) {
-            const auto& slot = gCallerSlots[i - 1];
-            if (slot.key && slot.next) {
-                (void)api->pltHook(slot.key, kDefaultManagerSymbol, slot.next, nullptr);
+        } else {
+            __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                                "[plt] defaultServiceManager hook failed in %s (rc=%d, original=%s)",
+                                image.path, rc, next ? "present" : "missing");
+            if (rc == ZN_SUCCESS) {
+                const int rollback = api->pltHook(image.base, kDefaultManagerSymbol,
+                                                  reinterpret_cast<void*>(gDefaultFallback), nullptr);
+                if (rollback != ZN_SUCCESS) {
+                    partialRollbackFailed = true;
+                    __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                                        "[rollback] cannot restore defaultServiceManager in %s (rc=%d); "
+                                        "residual callback will use the validated platform export",
+                                        image.path, rollback);
+                } else {
+                    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                                        "[rollback] replaced defaultServiceManager hook without an original "
+                                        "in %s with the validated platform export", image.path);
+                }
             }
         }
-        __android_log_print(ANDROID_LOG_WARN, "SpectrumPlatform",
-                            "Failed to install ServiceManager interception (installed=%zu)",
-                            installedCount);
+        return !partialRollbackFailed;
+    });
+
+    const char* failure = partialRollbackFailed ? "partial hook rollback failed" :
+                          mainRequiresImport && !mainInstalled ? "main executable import was not hooked" :
+                          !eligibleCount ? "no eligible defaultServiceManager PLT imports found" :
+                          !installedCount ? "no defaultServiceManager imports were hooked" : nullptr;
+    if (failure) {
+        size_t restoredCount = 0;
+        for (size_t i = callerSlotsUsed; i > 0; --i) {
+            const auto& slot = gCallerSlots[i - 1];
+            if (!slot.key) continue;
+            const int rollback = api->pltHook(slot.key, kDefaultManagerSymbol, slot.next, nullptr);
+            if (rollback == ZN_SUCCESS) {
+                ++restoredCount;
+            } else {
+                __android_log_print(ANDROID_LOG_ERROR, kLogTag,
+                                    "[rollback] cannot restore defaultServiceManager in %s (rc=%d); "
+                                    "residual callback will forward to its saved original",
+                                    addressImage(slot.key), rollback);
+            }
+        }
+        __android_log_print(ANDROID_LOG_WARN, kLogTag,
+                            "[plt] bridge not enabled: %s (imports seen=%zu, installed=%zu, restored=%zu)",
+                            failure, eligibleCount, installedCount, restoredCount);
         return false;
     }
 
     gNdkService = std::move(ndkService);
     gPlatformExtension = std::move(platformExt);
     gBridgeActive.store(true, std::memory_order_release);
-    __android_log_print(ANDROID_LOG_INFO, "SpectrumPlatform",
-                        "ServiceManager bridge ready across %zu caller images", installedCount);
+    __android_log_print(ANDROID_LOG_INFO, kLogTag,
+                        "[plt] ServiceManager bridge ready across %zu caller images; "
+                        "waiting for media.audio_flinger registration", installedCount);
     return true;
 }
 

@@ -5,11 +5,14 @@ PROPFILE=false
 POSTFSDATA=false
 LATESTARTSERVICE=false
 
-ui_print "- SpectrumAPI: arm64 Android 17 / API 37 only"
+ui_print "- SpectrumAPI: arm64 Android 15-17 / API 35-37"
 ABI="$(getprop ro.product.cpu.abi)"
 [ "${ARCH:-}" = "arm64" ] || [ "$ABI" = "arm64-v8a" ] || abort "SpectrumAPI requires arm64-v8a."
 SDK_API="${API:-$(getprop ro.build.version.sdk)}"
-[ "$SDK_API" = "37" ] || abort "SpectrumAPI requires Android 17 / API 37; this device reports API $SDK_API."
+case "$SDK_API" in
+    35|36|37) ;;
+    *) abort "SpectrumAPI requires Android 15-17 / API 35-37; this device reports API ${SDK_API:-unknown}." ;;
+esac
 
 ZN_FOUND=false
 for ZN_DIR in /data/adb/modules/zygisksu /data/adb/modules/zygisknext; do

@@ -40,10 +40,11 @@ ROOT = Path(__file__).resolve().parents[1]
 NDK_VERSION = "28.2.13676358"
 ABI = "arm64-v8a"
 NATIVE_API = 35
-DEVICE_API = 37
+SUPPORTED_DEVICE_APIS = (35, 36, 37)
+DEVICE_API = SUPPORTED_DEVICE_APIS[-1]
 TEMPLATES = (
     "module.prop", "zn_modules.txt", "customize.sh",
-    "sepolicy.rule", "NOTICE", "runtime-boundaries.json",
+    "sepolicy.rule", "NOTICE",
 )
 NATIVE_FILES = {
     "libspectrum_payload.so": "lib/libspectrum_payload.so",
@@ -438,11 +439,12 @@ def package(args: argparse.Namespace, ndk: Path, prebuilt: Path, variants: list[
     native = validate_native(args.native_build_dir)
     link_audit = audit_platform_linkage(args.native_build_dir, prebuilt, args.platform_link_mode)
     java, managers = java_artifacts(variants, args.sdk, args.expected_release_certificate, args.identity_role)
-    boundaries = json.loads(regular_file(template / "runtime-boundaries.json", template).read_text(encoding="utf-8"))
     metadata = {
         "schemaVersion": 2,
         "product": "SpectrumAPI", "version": version,
+        # Keep the legacy single target; the list records the installer allowlist.
         "abi": ABI, "nativeMinimumApi": NATIVE_API, "targetDeviceApi": DEVICE_API,
+        "supportedDeviceApis": SUPPORTED_DEVICE_APIS,
         "toolchain": {"ndk": NDK_VERSION, "androidStl": "c++_static", "compileSdk": 37,
                       "gradle": "9.9.1", "agp": "9.5.1", "javaSourceTarget": 17,
                       "optionalAppKotlinComposeCompiler": "2.4.20", "optionalAppMiuix": "0.9.4",
@@ -460,7 +462,6 @@ def package(args: argparse.Namespace, ndk: Path, prebuilt: Path, variants: list[
         "nativeConfiguration": configuration,
         "nativeArtifacts": native,
         "nativeLinkAudit": link_audit,
-        "runtimeBoundaries": boundaries,
     }
     entries = {}
     for name in TEMPLATES:

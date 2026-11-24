@@ -1,7 +1,9 @@
 SpectrumAPI module delivery notice
 
-This archive targets arm64-v8a Android 17 / API 37 and requires a separately
-installed, enabled Zygisk Next. Only /system/bin/audioserver is declared as
+This archive permits installation on arm64-v8a Android 15–17 (API 35–37)
+and requires a separately installed, enabled Zygisk Next. Playback capture
+requires a uniquely matching AudioFlinger ABI and a compatible Binder bridge.
+Only /system/bin/audioserver is declared as
 an injection target. Zygisk Next directly loads lib/libspectrum_payload.so
 through its FD injection entry; no second library is opened by module path.
 This module does not overlay ROM libraries or bundle a root CLI.
@@ -16,7 +18,7 @@ under notices/. No ROM library, ROM attachment, official Zygisk Next API
 header, or Zygisk Next runtime binary is redistributed in this module.
 
 Build artifact SHA-256 values are provenance/integrity inventory only.
-See runtime-boundaries.json and build-info.json for machine-readable details.
+See build-info.json for package metadata and build provenance.
 
 The pure-Java SDK connects directly to the native Binder extension on
 media.audio_flinger and does not require the optional Manager APK or any UID
